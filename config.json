@@ -1,0 +1,6 @@
+{
+  "appUrl": "https://biva-dev-app.onrender.com",
+  "startPath": "/account/login",
+  "inAppHosts": ["monime.io"],
+  "windowTitle": "BIVA"
+}

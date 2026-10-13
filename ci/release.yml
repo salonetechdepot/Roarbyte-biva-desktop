@@ -1,0 +1,35 @@
+# Builds BIVA-Setup.exe on Windows and publishes it as a GitHub Release.
+# Run it by pushing a version tag:   git tag v1.0.0 && git push origin v1.0.0
+# (or from the Actions tab → "Release desktop app" → Run workflow).
+name: Release desktop app
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Use the tag as the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: npm version "${{ github.ref_name }}".TrimStart('v') --no-git-tag-version --allow-same-version
+
+      - name: Install packages
+        run: npm install
+
+      - name: Build and publish BIVA-Setup.exe
+        run: npx electron-builder --win --x64 --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
