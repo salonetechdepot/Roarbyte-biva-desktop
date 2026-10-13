@@ -38,11 +38,11 @@ jobs:
             args: --mac --universal
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Use the tag as the app version
         shell: bash
@@ -53,12 +53,22 @@ jobs:
 
       - name: Build and publish
         shell: bash
-        run: npx electron-builder ${{ matrix.args }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional Apple signing + notarization (add these repo secrets once you have an Apple Developer account):
-          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Optional Apple signing + notarization (add these repo secrets once you have an Apple Developer account).
+          MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          MAC_APPLE_ID: ${{ secrets.APPLE_ID }}
+          MAC_APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            if [ -n "$MAC_CERT" ]; then
+              export CSC_LINK="$MAC_CERT" CSC_KEY_PASSWORD="$MAC_CERT_PASSWORD"
+              export APPLE_ID="$MAC_APPLE_ID" APPLE_APP_SPECIFIC_PASSWORD="$MAC_APPLE_PASSWORD" APPLE_TEAM_ID="$MAC_TEAM_ID"
+            else
+              # No Apple certificate yet: skip Apple signing (build/afterPack.js ad-hoc signs instead).
+              export CSC_IDENTITY_AUTO_DISCOVERY=false
+            fi
+          fi
+          npx electron-builder ${{ matrix.args }} --publish always
