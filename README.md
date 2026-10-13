@@ -1,4 +1,4 @@
-# BIVA Desktop (Windows)
+# BIVA Desktop (Windows + Mac)
 
 A desktop app for BIVA, like Claude Desktop: users download one installer, install it, and get a
 **BIVA** icon on the desktop and Start Menu. The app opens the live BIVA site
@@ -77,8 +77,30 @@ repo's GitHub Releases and saves it as **`BIVA Setup.exe`**.
    Release (about 5–8 minutes; watch it in the repo's **Actions** tab). No token setup needed.
 4. Open the website's `/download` page — the button now downloads `BIVA Setup.exe`
    (the page refreshes its version info every 10 minutes).
-5. New version later: change the app, commit, then tag `v1.0.1`, `v1.0.2`, … and push the tag.
+5. New version later: raise `"version"` in `package.json` (e.g. `1.1.1`) and run `push-to-github.bat` again.
    Installed apps update themselves and offer **Restart now**.
+
+## Mac version
+
+GitHub builds the Mac app at the same time as Windows (every `v*` tag) and attaches
+**`BIVA-Mac.dmg`** to the same Release. It runs on every Mac (Apple Silicon M1–M4 and Intel), macOS 11+.
+
+How Mac users install it:
+1. Download `BIVA.dmg` from the website's Download page and open it.
+2. Drag the **BIVA** icon onto the **Applications** folder.
+3. Open BIVA from Applications. The first time, macOS says it can't check the developer:
+   click **Done**, then go to **System Settings → Privacy & Security**, scroll down and click
+   **Open Anyway** (on older macOS: right-click BIVA → Open → Open). This is only needed once.
+
+When a new version is out, the Mac app shows **Update available → Download**.
+
+To remove the first-open warning and get automatic Mac updates, join the Apple Developer Program
+($99/year), then add these repository secrets (Settings → Secrets and variables → Actions):
+`MAC_CERT_P12_BASE64` (your "Developer ID Application" certificate exported as .p12, base64),
+`MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
+The next release is then signed and notarized automatically.
+
+A Mac build can't be made on Windows — GitHub's Mac machines do it for you.
 
 ## 5. Code signing (removes the Windows warning)
 
@@ -94,5 +116,6 @@ electron-builder's Windows signing guide: https://www.electron.build/code-signin
 | `src/preload.js` | Lets the site detect the app (`window.bivaDesktop.isDesktop`) |
 | `src/pages/` | Loading and offline screens |
 | `build/icon.ico` | App + installer icon |
+| `build/icon-mac.png`, `build/dmg-background.png`, `build/entitlements.mac.plist`, `build/afterPack.js` | Mac icon, DMG window, Mac permissions and signing |
 | `build/installerSidebar.bmp` | Picture on the installer's Welcome/Finish pages |
 | `ci/release.yml` → `.github/workflows/release.yml` | Builds + publishes the installer when you push a `v*` tag |

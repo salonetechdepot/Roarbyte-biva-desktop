@@ -202,6 +202,8 @@ function createMainWindow() {
 
 // ---------------------------------------------------------------- menu
 
+const isMac = process.platform === "darwin";
+
 function buildMenu() {
   const go = (url) => mainWindow && void mainWindow.loadURL(url);
   const template = [
@@ -225,6 +227,9 @@ function buildMenu() {
             }),
         },
         { type: "separator" },
+        ...(isMac
+          ? [{ role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }]
+          : []),
         { role: "quit", label: "Quit BIVA" },
       ],
     },
@@ -254,10 +259,7 @@ function buildMenu() {
         ...(app.isPackaged ? [] : [{ role: "toggleDevTools" }]),
       ],
     },
-    {
-      label: "Window",
-      submenu: [{ role: "minimize" }, { role: "close" }],
-    },
+    isMac ? { role: "windowMenu" } : { label: "Window", submenu: [{ role: "minimize" }, { role: "close" }] },
     {
       label: "Help",
       submenu: [
@@ -310,8 +312,23 @@ function checkForUpdates(manual) {
   const { autoUpdater } = require("electron-updater");
   if (!updaterReady) {
     updaterReady = true;
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // Windows installs updates itself. On Mac (no Apple certificate yet) we point to the download page instead.
+    autoUpdater.autoDownload = !isMac;
+    autoUpdater.autoInstallOnAppQuit = !isMac;
+    if (isMac) {
+      autoUpdater.on("update-available", (info) => {
+        void dialog
+          .showMessageBox({
+            type: "info",
+            buttons: ["Download", "Later"],
+            defaultId: 0,
+            title: "Update available",
+            message: `BIVA ${info.version} is available.`,
+            detail: "Download the new version, open it and drag BIVA into Applications to replace this one.",
+          })
+          .then(({ response }) => response === 0 && openOutside(`${APP_URL}/download`));
+      });
+    }
     autoUpdater.on("update-downloaded", (info) => {
       void dialog
         .showMessageBox({

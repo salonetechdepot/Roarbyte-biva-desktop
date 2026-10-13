@@ -1,9 +1,12 @@
 @echo off
 setlocal
-REM Pushes this folder to GitHub and releases v1.0.0 (GitHub then builds BIVA-Setup.exe).
+REM Pushes this folder to GitHub and releases the version in package.json
+REM (GitHub then builds BIVA-Setup.exe for Windows and BIVA-Mac.dmg for Mac).
 cd /d "%~dp0"
 set "REPO=https://github.com/salonetechdepot/Roarbyte-biva-desktop.git"
-set "TAG=v1.0.0"
+for /f "usebackq delims=" %%v in (`node -p "require('./package.json').version"`) do set "TAG=v%%v"
+if "%TAG%"=="" (echo Could not read the version from package.json - is Node.js installed? & goto :fail)
+echo Releasing %TAG% ...
 
 where git >nul 2>nul || (echo Git is not installed. Get it from https://git-scm.com/download/win & goto :fail)
 
@@ -33,7 +36,7 @@ git rev-parse %TAG% >nul 2>nul || git tag %TAG%
 git push origin %TAG% || goto :fail
 
 echo.
-echo Pushed. GitHub is now building BIVA-Setup.exe (5-8 minutes).
+echo Pushed %TAG%. GitHub is now building the Windows and Mac apps (about 10 minutes).
 echo Opening the Actions page so you can watch it...
 start "" "https://github.com/salonetechdepot/Roarbyte-biva-desktop/actions"
 pause
