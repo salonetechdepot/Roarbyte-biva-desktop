@@ -1,11 +1,14 @@
 /**
- * BIVA desktop — a secure window around the hosted BIVA web app (Render).
- * Everything BIVA does still happens on the server; this shell only adds a desktop window,
- * remembered sign-in, an offline screen, printing/downloads and automatic updates.
+ * BIVA desktop — a window around the hosted BIVA web app.
+ * The first launch needs the internet so the business can be copied into SQLite on this computer.
+ * After that, the app reads and writes that local copy when the internet is down, and a sync
+ * button in the app sends those local changes back to the cloud.
  */
-const { app, BrowserWindow, Menu, shell, session, dialog } = require("electron");
+const { app, BrowserWindow, Menu, shell, session, dialog, ipcMain } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const { openOfflineDb, registerOfflineIpc } = require("./offline-db");
+const { startLocalApp } = require("./local-app");
 
 // ---------------------------------------------------------------- configuration
 
@@ -28,6 +31,7 @@ const config = readConfig();
 // Optional override for testing another deployment: set BIVA_APP_URL before starting.
 const APP_URL = (process.env.BIVA_APP_URL || config.appUrl).replace(/\/+$/, "");
 const APP_ORIGIN = new URL(APP_URL).origin;
+let localOrigin = "";
 const START_URL = APP_URL + (config.startPath || "/");
 const PAGES = path.join(__dirname, "pages");
 
@@ -37,6 +41,7 @@ function isInApp(rawUrl) {
     const url = new URL(rawUrl);
     if (url.protocol === "file:") return url.pathname.includes("/pages/");
     if (url.protocol === "about:") return true;
+    if (localOrigin && url.origin === localOrigin) return true;
     if (url.origin === APP_ORIGIN) return true;
     if (url.protocol !== "https:") return false;
     return (config.inAppHosts || []).some((host) => url.hostname === host || url.hostname.endsWith("." + host));
@@ -146,12 +151,21 @@ function wireNavigation(win) {
   });
 }
 
+const NETWORK_ERROR_CODES = new Set([-2, -7, -21, -100, -101, -102, -105, -106, -109, -118, -137]);
+
 function showOffline(win, failedUrl, reason) {
+  const onLocal = localOrigin && String(failedUrl || "").startsWith(localOrigin);
+  if (localOrigin && !onLocal) {
+    void win.loadURL(localOrigin + (config.startPath || "/"));
+    return;
+  }
   const target = failedUrl && failedUrl.startsWith(APP_ORIGIN) ? failedUrl : START_URL;
-  void win.loadFile(path.join(PAGES, "offline.html"), { query: { target, reason: reason || "" } });
+  void win.loadFile(path.join(PAGES, "offline.html"), {
+    query: { target, local: localOrigin ? localOrigin + (config.startPath || "/") : "", reason: reason || "" },
+  });
 }
 
-function createMainWindow() {
+function createMainWindow(startUrl) {
   const state = loadWindowState();
   mainWindow = new BrowserWindow({
     x: state.x,
@@ -187,6 +201,10 @@ function createMainWindow() {
   mainWindow.webContents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
     // -3 = navigation aborted (normal when a page redirects); ignore sub-frames.
     if (!isMainFrame || code === -3) return;
+    if (localOrigin && NETWORK_ERROR_CODES.has(code) && !String(url).startsWith(localOrigin)) {
+      void mainWindow.loadURL(localOrigin + (config.startPath || "/"));
+      return;
+    }
     showOffline(mainWindow, url, description);
   });
 
@@ -196,7 +214,7 @@ function createMainWindow() {
 
   // Splash first (Render can take a while to wake up), then the real app.
   void mainWindow.loadFile(path.join(PAGES, "splash.html")).then(() => {
-    if (mainWindow) void mainWindow.loadURL(START_URL);
+    if (mainWindow) void mainWindow.loadURL(startUrl || START_URL);
   });
 }
 
@@ -286,7 +304,7 @@ function lockDownPermissions() {
     } catch {
       // ignore
     }
-    callback(origin === APP_ORIGIN && allowed.has(permission));
+    callback((origin === APP_ORIGIN || (localOrigin && origin === localOrigin)) && allowed.has(permission));
   });
 }
 
@@ -375,13 +393,49 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    const dbFile = path.join(app.getPath("userData"), "biva-offline.sqlite");
+    const mirrorDir = path.join(app.getPath("userData"), "app-mirror");
+    const dbPromise = openOfflineDb(dbFile).catch((error) => {
+      console.warn("Offline database did not open:", error?.message || error);
+      return null;
+    });
+    registerOfflineIpc(ipcMain, dbPromise.then((db) => {
+      if (db) return db;
+      const emptyStatus = { seeded: false, lastSyncAt: null, pendingCount: 0, pending: [] };
+      return {
+        status: async () => emptyStatus,
+        read: async () => null,
+        writeCache: async () => false,
+        enqueue: async () => emptyStatus,
+        drop: async () => emptyStatus,
+        setMeta: async () => {},
+        getMeta: () => null,
+        listCacheKeys: () => [],
+        markSynced: async () => emptyStatus,
+      };
+    }));
     lockDownPermissions();
     buildMenu();
-    createMainWindow();
+    dbPromise.then(async (db) => {
+      if (!db) {
+        createMainWindow(START_URL);
+        return;
+      }
+      try {
+        const local = await startLocalApp({ upstream: APP_URL, db, mirrorDir });
+        localOrigin = local.origin;
+        createMainWindow(local.origin + (config.startPath || "/"));
+      } catch (error) {
+        console.warn("Local app did not start:", error?.message || error);
+        createMainWindow(START_URL);
+      }
+    });
     setTimeout(() => checkForUpdates(false), 10_000);
 
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createMainWindow(localOrigin ? localOrigin + (config.startPath || "/") : START_URL);
+      }
     });
   });
 

@@ -29,10 +29,10 @@
       </svg>
     </div>
     <h1>Can't reach BIVA right now</h1>
-    <p>BIVA runs online, so it needs an internet connection.</p>
+    <p>The first time you open BIVA on this computer it needs the internet, so your business can be saved here. After that it keeps working offline.</p>
     <ul>
-      <li>Check your Wi-Fi or mobile data.</li>
-      <li>If you just opened BIVA, the server may still be waking up — give it a minute.</li>
+      <li>Connect to Wi-Fi or mobile data once, then open BIVA and sign in.</li>
+      <li>If you already did that, the server may still be waking up — give it a minute and try again.</li>
     </ul>
     <button id="retry" type="button">Try again</button>
     <p class="auto" id="auto" aria-live="polite"></p>
@@ -41,14 +41,19 @@
   <script>
     const params = new URLSearchParams(location.search);
     const target = params.get("target") || "";
+    const local = params.get("local") || "";
     const reason = params.get("reason") || "";
     if (reason) document.getElementById("detail").textContent = "Details: " + reason;
-    const go = () => { if (/^https:\/\//.test(target)) location.href = target; };
+    const go = () => {
+      if (/^http:\/\/127\.0\.0\.1/.test(local)) { location.href = local; return; }
+      if (/^https:\/\//.test(target)) location.href = target;
+    };
     document.getElementById("retry").addEventListener("click", go);
-    let seconds = 20;
+    let seconds = 5;
     const auto = document.getElementById("auto");
     const tick = () => {
-      if (!navigator.onLine) { auto.textContent = "Waiting for a connection…"; return; }
+      if (/^http:\/\/127\.0\.0\.1/.test(local)) { auto.textContent = "Opening the saved copy…"; go(); return; }
+      if (!navigator.onLine) { auto.textContent = "No internet. Open BIVA once while online so this computer can keep a copy."; return; }
       auto.textContent = "Trying again in " + seconds + "s";
       if (seconds-- <= 0) go();
     };

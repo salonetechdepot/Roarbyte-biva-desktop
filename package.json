@@ -14,7 +14,8 @@
     "dist:publish": "electron-builder --win --x64 --publish always"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "sql.js": "^1.13.0"
   },
   "devDependencies": {
     "electron": "^35.7.5",
@@ -33,6 +34,9 @@
       "assets/**/*",
       "config.json",
       "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/sql.js/dist/sql-wasm.wasm"
     ],
     "win": {
       "target": [
