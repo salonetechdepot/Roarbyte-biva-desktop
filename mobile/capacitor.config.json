@@ -1,0 +1,21 @@
+{
+  "appId": "com.roarbyte.biva",
+  "appName": "BIVA",
+  "webDir": "www",
+  "server": {
+    "url": "https://biva-dev-app.onrender.com/account/login",
+    "androidScheme": "https",
+    "allowNavigation": [
+      "biva-dev-app.onrender.com",
+      "*.onrender.com",
+      "monime.io",
+      "*.monime.io"
+    ]
+  },
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "automatic"
+  }
+}

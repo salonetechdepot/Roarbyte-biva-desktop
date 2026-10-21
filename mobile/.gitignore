@@ -1,0 +1,11 @@
+node_modules/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/keystore.properties
+android/app/biva-release.keystore
+ios/App/Pods/
+ios/App/build/
+ios/DerivedData/
+*.xcuserstate

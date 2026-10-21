@@ -1,0 +1,112 @@
+# Builds BIVA for Android (BIVA-Android.apk) and iPhone (BIVA-iPhone.ipa)
+# and uploads both onto a GitHub Release, the same way the desktop installers are published.
+# A version tag runs this with the Windows and Mac build. You can also run it by hand
+# and choose which release receives the files.
+name: Release phone apps
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag that receives the phone installers
+        required: false
+        default: v1.1.1
+      platform:
+        description: Which phone build to publish
+        required: false
+        default: both
+        type: choice
+        options:
+          - both
+          - android
+          - ios
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Android
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.platform != 'ios'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install packages
+        working-directory: mobile
+        run: npm install
+
+      - name: Sync the Android project
+        working-directory: mobile
+        run: npx cap sync android
+
+      - name: Build the release APK
+        working-directory: mobile/android
+        run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon
+
+      - name: Upload BIVA-Android.apk
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+        run: gh release upload "$RELEASE_TAG" mobile/android/app/build/outputs/apk/release/BIVA-Android.apk --clobber --repo "$GITHUB_REPOSITORY"
+
+  ios:
+    name: iPhone
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.platform != 'android'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install packages
+        working-directory: mobile
+        run: npm install
+
+      - name: Sync the iOS project
+        working-directory: mobile
+        run: npx cap sync ios
+
+      - name: Install CocoaPods
+        working-directory: mobile/ios/App
+        run: pod install
+
+      - name: Build the iPhone app
+        working-directory: mobile/ios/App
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -derivedDataPath "$RUNNER_TEMP/biva-ios"
+          APP="$(find "$RUNNER_TEMP/biva-ios/Build/Products" -name 'App.app' -type d | head -n 1)"
+          test -n "$APP"
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -r "$GITHUB_WORKSPACE/BIVA-iPhone.ipa" Payload
+
+      - name: Upload BIVA-iPhone.ipa
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+        run: gh release upload "$RELEASE_TAG" BIVA-iPhone.ipa --clobber --repo "$GITHUB_REPOSITORY"
