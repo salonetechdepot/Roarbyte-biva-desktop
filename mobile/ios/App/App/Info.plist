@@ -47,5 +47,13 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>BIVA uses the camera to scan product barcodes.</string>
+	<key>WKAppBoundDomains</key>
+	<array>
+		<string>biva-dev-app.onrender.com</string>
+		<string>biva-app-api.onrender.com</string>
+		<string>inventorylite-4glg.onrender.com</string>
+		<string>my.monime.io</string>
+		<string>monime.io</string>
+	</array>
 </dict>
 </plist>

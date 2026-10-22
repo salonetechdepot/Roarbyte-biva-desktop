@@ -5,17 +5,20 @@
   "server": {
     "url": "https://biva-dev-app.onrender.com/account/login",
     "androidScheme": "https",
+    "errorPath": "offline.html",
     "allowNavigation": [
       "biva-dev-app.onrender.com",
-      "*.onrender.com",
-      "monime.io",
-      "*.monime.io"
+      "biva-app-api.onrender.com",
+      "inventorylite-4glg.onrender.com",
+      "my.monime.io",
+      "monime.io"
     ]
   },
   "android": {
     "allowMixedContent": false
   },
   "ios": {
-    "contentInset": "automatic"
+    "contentInset": "automatic",
+    "limitsNavigationsToAppBoundDomains": true
   }
 }
