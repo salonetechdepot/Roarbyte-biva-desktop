@@ -3,7 +3,7 @@
   "appName": "BIVA",
   "webDir": "www",
   "server": {
-    "url": "https://biva-dev-app.onrender.com/account/login?appBuild=1.1.3",
+    "url": "https://biva-dev-app.onrender.com/account/login?appBuild=1.1.4",
     "androidScheme": "https",
     "errorPath": "offline.html",
     "allowNavigation": [
@@ -15,7 +15,8 @@
     ]
   },
   "android": {
-    "allowMixedContent": false
+    "allowMixedContent": false,
+    "resolveServiceWorkerRequests": false
   },
   "ios": {
     "contentInset": "automatic",

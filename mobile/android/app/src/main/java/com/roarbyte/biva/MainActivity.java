@@ -1,10 +1,16 @@
 package com.roarbyte.biva;
 
 import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
 import android.webkit.URLUtil;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.BridgeActivity;
 import java.io.File;
@@ -14,6 +20,31 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        if (getBridge() == null || getBridge().getWebView() == null) return;
+        WebView webView = getBridge().getWebView();
+        webView.addJavascriptInterface(new BivaSessionBridge(this), "bivaNative");
+        getBridge().setWebViewClient(new BivaWebViewClient(getBridge()));
+        if (!hasNetwork()) {
+            webView.getSettings().setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
+            String path = new BivaSessionBridge(this).getPath();
+            String start = path.isEmpty()
+                ? "https://biva-dev-app.onrender.com/account/login?appBuild=1.1.4"
+                : "https://biva-dev-app.onrender.com" + path;
+            webView.loadUrl(start);
+        }
+    }
+
+    private boolean hasNetwork() {
+        ConnectivityManager manager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (manager == null) return true;
+        Network network = manager.getActiveNetwork();
+        if (network == null) return false;
+        NetworkCapabilities caps = manager.getNetworkCapabilities(network);
+        return caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+    }
     @Override
     public void onResume() {
         super.onResume();

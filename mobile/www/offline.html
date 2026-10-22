@@ -25,13 +25,44 @@
         font-weight: 700;
       }
     </style>
+    <script>
+      (function () {
+        var origin = "https://biva-dev-app.onrender.com";
+        var path = "";
+        var session = "";
+        try {
+          if (window.bivaNative) {
+            path = window.bivaNative.getPath() || "";
+            session = window.bivaNative.getSession() || "";
+          }
+        } catch (e) {}
+        var target = origin + (path.charAt(0) === "/" ? path : "/account/login?appBuild=1.1.4");
+        if (sessionStorage.getItem("biva-offline-retry") !== "1") {
+          sessionStorage.setItem("biva-offline-retry", "1");
+          location.replace(target);
+          return;
+        }
+        document.addEventListener("DOMContentLoaded", function () {
+          if (!session) return;
+          var title = document.getElementById("title");
+          var copy = document.getElementById("copy");
+          var button = document.getElementById("retry");
+          if (title) title.textContent = "Your business is on this phone";
+          if (copy) copy.textContent = "Your sign-in is saved here. Open BIVA to go back to the last screen.";
+          if (button) {
+            button.textContent = "Open BIVA";
+            button.onclick = function () { location.replace(target); };
+          }
+        });
+      })();
+    </script>
   </head>
   <body>
     <main>
       <p>Offline</p>
-      <h1>BIVA needs one online sign-in</h1>
-      <p>Open BIVA once while you are online and sign in. After that, your business stays on this phone.</p>
-      <button type="button" onclick="location.href='https://biva-dev-app.onrender.com/account/login'">Try again</button>
+      <h1 id="title">BIVA needs one online sign-in</h1>
+      <p id="copy">Open BIVA once while you are online and sign in. After that, your business stays on this phone.</p>
+      <button id="retry" type="button" onclick="location.href='https://biva-dev-app.onrender.com/account/login?appBuild=1.1.4'">Try again</button>
     </main>
   </body>
 </html>

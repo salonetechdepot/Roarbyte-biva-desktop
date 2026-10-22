@@ -1,5 +1,7 @@
 import UIKit
 import Capacitor
+import WebKit
+import ObjectiveC
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -7,7 +9,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        BivaOfflineRetry.install()
         return true
     }
 
@@ -46,4 +48,66 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
     }
 
+}
+
+/// A lost connection must open the saved business, not the first-run page.
+enum BivaOfflineRetry {
+    private static var installed = false
+    private static var retries = 0
+
+    static func install() {
+        if installed { return }
+        installed = true
+        swap(#selector(WebViewDelegationHandler.webView(_:didFailProvisionalNavigation:withError:)), #selector(WebViewDelegationHandler.biva_didFailProvisional(_:_:_:)))
+        swap(#selector(WebViewDelegationHandler.webView(_:didFail:withError:)), #selector(WebViewDelegationHandler.biva_didFail(_:_:_:)))
+    }
+
+    private static func swap(_ original: Selector, _ replacement: Selector) {
+        guard
+            let first = class_getInstanceMethod(WebViewDelegationHandler.self, original),
+            let second = class_getInstanceMethod(WebViewDelegationHandler.self, replacement)
+        else { return }
+        method_exchangeImplementations(first, second)
+    }
+
+    static func keepSavedApp(_ webView: WKWebView, error: Error) -> Bool {
+        let ns = error as NSError
+        let offline = ns.domain == NSURLErrorDomain && [
+            NSURLErrorNotConnectedToInternet,
+            NSURLErrorNetworkConnectionLost,
+            NSURLErrorTimedOut,
+            NSURLErrorCannotFindHost,
+            NSURLErrorCannotConnectToHost,
+            NSURLErrorDNSLookupFailed,
+            NSURLErrorInternationalRoamingOff,
+            NSURLErrorDataNotAllowed,
+        ].contains(ns.code)
+        guard offline else { return false }
+        let failing = (ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? webView.url
+        guard let failing, failing.host == "biva-dev-app.onrender.com" else { return false }
+        if retries >= 2 { return false }
+        retries += 1
+        var request = URLRequest(url: failing)
+        request.cachePolicy = .returnCacheDataElseLoad
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            webView.evaluateJavaScript("document.body ? document.body.innerText.length : 0") { value, _ in
+                let length = value as? Int ?? 0
+                if length > 40 { return }
+                webView.load(request)
+            }
+        }
+        return true
+    }
+}
+
+extension WebViewDelegationHandler {
+    @objc func biva_didFailProvisional(_ webView: WKWebView, _ navigation: WKNavigation!, _ error: Error) {
+        if BivaOfflineRetry.keepSavedApp(webView, error: error) { return }
+        biva_didFailProvisional(webView, navigation, error)
+    }
+
+    @objc func biva_didFail(_ webView: WKWebView, _ navigation: WKNavigation!, _ error: Error) {
+        if BivaOfflineRetry.keepSavedApp(webView, error: error) { return }
+        biva_didFail(webView, navigation, error)
+    }
 }

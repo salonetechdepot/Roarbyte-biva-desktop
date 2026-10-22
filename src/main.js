@@ -33,6 +33,7 @@ const config = readConfig();
 const APP_URL = (process.env.BIVA_APP_URL || config.appUrl).replace(/\/+$/, "");
 const APP_ORIGIN = new URL(APP_URL).origin;
 let localOrigin = "";
+let resumePath = "";
 const START_URL = APP_URL + (config.startPath || "/");
 const PAGES = path.join(__dirname, "pages");
 
@@ -154,15 +155,19 @@ function wireNavigation(win) {
 
 const NETWORK_ERROR_CODES = new Set([-2, -7, -21, -100, -101, -102, -105, -106, -109, -118, -137]);
 
+function localStart() {
+  return localOrigin + (resumePath || config.startPath || "/");
+}
+
 function showOffline(win, failedUrl, reason) {
   const onLocal = localOrigin && String(failedUrl || "").startsWith(localOrigin);
   if (localOrigin && !onLocal) {
-    void win.loadURL(localOrigin + (config.startPath || "/"));
+    void win.loadURL(localStart());
     return;
   }
   const target = failedUrl && failedUrl.startsWith(APP_ORIGIN) ? failedUrl : START_URL;
   void win.loadFile(path.join(PAGES, "offline.html"), {
-    query: { target, local: localOrigin ? localOrigin + (config.startPath || "/") : "", reason: reason || "" },
+    query: { target, local: localOrigin ? localStart() : "", reason: reason || "" },
   });
 }
 
@@ -203,7 +208,7 @@ function createMainWindow(startUrl) {
     // -3 = navigation aborted (normal when a page redirects); ignore sub-frames.
     if (!isMainFrame || code === -3) return;
     if (localOrigin && NETWORK_ERROR_CODES.has(code) && !String(url).startsWith(localOrigin)) {
-      void mainWindow.loadURL(localOrigin + (config.startPath || "/"));
+      void mainWindow.loadURL(localStart());
       return;
     }
     showOffline(mainWindow, url, description);
@@ -453,8 +458,8 @@ if (!app.requestSingleInstanceLock()) {
       try {
         const local = await startLocalApp({ upstream: APP_URL, db, mirrorDir });
         localOrigin = local.origin;
-        const resume = savedStartPath(db);
-        createMainWindow(local.origin + (resume || config.startPath || "/"));
+        resumePath = savedStartPath(db) || "";
+        createMainWindow(local.origin + (resumePath || config.startPath || "/"));
       } catch (error) {
         console.warn("Local app did not start:", error?.message || error);
         createMainWindow(START_URL);
@@ -464,7 +469,7 @@ if (!app.requestSingleInstanceLock()) {
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow(localOrigin ? localOrigin + (config.startPath || "/") : START_URL);
+        createMainWindow(localOrigin ? localStart() : START_URL);
       }
     });
   });
