@@ -58,8 +58,8 @@ enum BivaOfflineRetry {
     static func install() {
         if installed { return }
         installed = true
-        swap(#selector(WebViewDelegationHandler.webView(_:didFailProvisionalNavigation:withError:)), #selector(WebViewDelegationHandler.biva_didFailProvisional(_:_:_:)))
-        swap(#selector(WebViewDelegationHandler.webView(_:didFail:withError:)), #selector(WebViewDelegationHandler.biva_didFail(_:_:_:)))
+        swap(NSSelectorFromString("webView:didFailProvisionalNavigation:withError:"), #selector(WebViewDelegationHandler.biva_didFailProvisional(_:_:_:)))
+        swap(NSSelectorFromString("webView:didFailNavigation:withError:"), #selector(WebViewDelegationHandler.biva_didFail(_:_:_:)))
     }
 
     private static func swap(_ original: Selector, _ replacement: Selector) {
