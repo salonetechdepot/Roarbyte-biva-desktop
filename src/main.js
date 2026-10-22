@@ -7,6 +7,7 @@
 const { app, BrowserWindow, Menu, shell, session, dialog, ipcMain } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const { spawn } = require("node:child_process");
 const { openOfflineDb, registerOfflineIpc } = require("./offline-db");
 const { startLocalApp, savedStartPath } = require("./local-app");
 
@@ -374,9 +375,32 @@ function checkForUpdates(manual) {
     });
 }
 
-ipcMain.handle("biva-update:install", () => {
-  checkForUpdates(true);
-  return true;
+ipcMain.handle("biva-update:install", async () => {
+  try {
+    const mac = process.platform === "darwin";
+    const name = mac ? "BIVA-Mac.dmg" : "BIVA-Setup.exe";
+    const response = await fetch(
+      `https://github.com/salonetechdepot/Roarbyte-biva-desktop/releases/latest/download/${name}`,
+      { redirect: "follow" },
+    );
+    if (!response.ok) throw new Error(`Download failed (${response.status})`);
+    const file = path.join(app.getPath("temp"), name);
+    fs.writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+    const child = mac
+      ? spawn("open", [file], { detached: true, stdio: "ignore" })
+      : spawn(file, [], { detached: true, stdio: "ignore" });
+    child.unref();
+    setTimeout(() => app.quit(), 800);
+    return true;
+  } catch (error) {
+    await dialog.showMessageBox({
+      type: "warning",
+      title: "Update",
+      message: "BIVA could not start the installer.",
+      detail: String(error?.message || error),
+    });
+    return false;
+  }
 });
 
 // ---------------------------------------------------------------- start
