@@ -37,7 +37,13 @@
           }
         } catch (e) {}
         var target = origin + (path.charAt(0) === "/" ? path : "/account/login?appBuild=1.1.4");
-        if (sessionStorage.getItem("biva-offline-retry") !== "1") {
+        var tries = Number(sessionStorage.getItem("biva-offline-retry") || "0");
+        if (session && tries < 3) {
+          sessionStorage.setItem("biva-offline-retry", String(tries + 1));
+          location.replace(target);
+          return;
+        }
+        if (!session && tries < 1) {
           sessionStorage.setItem("biva-offline-retry", "1");
           location.replace(target);
           return;
@@ -47,8 +53,8 @@
           var title = document.getElementById("title");
           var copy = document.getElementById("copy");
           var button = document.getElementById("retry");
-          if (title) title.textContent = "Your business is on this phone";
-          if (copy) copy.textContent = "Your sign-in is saved here. Open BIVA to go back to the last screen.";
+          if (title) title.textContent = "Your sign-in is still on this phone";
+          if (copy) copy.textContent = "The access token is saved here. Open BIVA to go back to the last screen. You do not need to sign in again.";
           if (button) {
             button.textContent = "Open BIVA";
             button.onclick = function () { location.replace(target); };

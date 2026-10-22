@@ -27,9 +27,12 @@ public class MainActivity extends BridgeActivity {
         WebView webView = getBridge().getWebView();
         webView.addJavascriptInterface(new BivaSessionBridge(this), "bivaNative");
         getBridge().setWebViewClient(new BivaWebViewClient(getBridge()));
-        if (!hasNetwork()) {
+        BivaSessionBridge saved = new BivaSessionBridge(this);
+        String path = saved.getPath();
+        String session = saved.getSession();
+        boolean signedIn = session != null && session.contains("\"token\"");
+        if (signedIn || !hasNetwork()) {
             webView.getSettings().setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
-            String path = new BivaSessionBridge(this).getPath();
             String start = path.isEmpty()
                 ? "https://biva-dev-app.onrender.com/account/login?appBuild=1.1.4"
                 : "https://biva-dev-app.onrender.com" + path;
