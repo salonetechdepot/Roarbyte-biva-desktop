@@ -3,7 +3,7 @@
   "appName": "BIVA",
   "webDir": "www",
   "server": {
-    "url": "https://biva-dev-app.onrender.com/account/login",
+    "url": "https://biva-dev-app.onrender.com/account/login?appBuild=1.1.2",
     "androidScheme": "https",
     "errorPath": "offline.html",
     "allowNavigation": [

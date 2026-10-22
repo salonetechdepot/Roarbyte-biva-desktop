@@ -5,6 +5,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("bivaDesktop", {
   isDesktop: true,
   platform: process.platform,
+  version: "1.1.2",
+  update: () => ipcRenderer.invoke("biva-update:install"),
   offline: {
     status: () => ipcRenderer.invoke("biva-offline:status"),
     read: (key) => ipcRenderer.invoke("biva-offline:read", key),

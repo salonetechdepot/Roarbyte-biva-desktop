@@ -179,6 +179,53 @@ function tenantDataPaths(tenantId) {
   return paths;
 }
 
+function applyOfflineChange(db, method, urlPath, bodyText) {
+  let payload = null;
+  try {
+    payload = JSON.parse(bodyText);
+  } catch {
+    payload = null;
+  }
+  const match = String(urlPath).split("?")[0].match(/\/api\/(?:proxy\/api\/)?([a-z0-9-]+)(?:\/([^/?]+))?/i);
+  const name = match && match[1];
+  if (!name || name === "auth" || name === "login" || name === "proxy") return;
+  const pathId = match[2] && match[2] !== "by-tenant" ? decodeURIComponent(match[2]) : null;
+  const id = (payload && (payload.id || payload.Id)) || pathId || null;
+  for (const key of db.listCacheKeys()) {
+    if (!String(key).includes(`/api/${name}`) && !String(key).includes(`/api/proxy/api/${name}`)) continue;
+    const row = db.read(key);
+    if (!row) continue;
+    let json;
+    try {
+      json = JSON.parse(row.body);
+    } catch {
+      continue;
+    }
+    const patchList = (list) => {
+      if (method === "DELETE" && id) return list.filter((row) => (row && (row.id || row.Id)) !== id);
+      if ((method === "PUT" || method === "PATCH") && id && payload) {
+        return list.map((row) => ((row && (row.id || row.Id)) === id ? { ...row, ...payload, id } : row));
+      }
+      if (method === "POST" && payload) return [payload, ...list];
+      return list;
+    };
+    let next = null;
+    if (Array.isArray(json)) next = patchList(json);
+    else if (json && Array.isArray(json.data)) next = { ...json, data: patchList(json.data) };
+    else if (json && Array.isArray(json.items)) next = { ...json, items: patchList(json.items) };
+    else if (json && Array.isArray(json.value)) next = { ...json, value: patchList(json.value) };
+    if (next) db.writeCache(key, row.status || 200, JSON.stringify(next));
+  }
+}
+
+function savedStartPath(db) {
+  const raw = db.getMeta("session");
+  const saved = db.getMeta("sessionPath") || "";
+  if (!raw || raw === "null") return null;
+  if (!saved.startsWith("/") || saved.startsWith("//") || saved.includes("://")) return null;
+  return saved;
+}
+
 function pageLinks(html) {
   const found = [];
   for (const match of String(html).matchAll(/href="(\/[^"#]*)"/g)) {
@@ -385,8 +432,8 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           if (cookie) headers.cookie = cookie;
           try {
             const stored = change.headers ? JSON.parse(change.headers) : {};
-            if (stored.authorization) headers.authorization = stored.authorization;
-            if (stored.cookie) headers.cookie = stored.cookie;
+          if (stored.authorization && !headers.cookie) headers.authorization = stored.authorization;
+          if (stored.cookie && !headers.cookie) headers.cookie = stored.cookie;
           } catch {
             // Continue without the saved header.
           }
@@ -445,6 +492,35 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           send(res, 202, JSON.stringify({ started: true, routes: routes.length }), { "content-type": "application/json" });
           return;
         }
+        if (urlPath.startsWith("/__biva/session") && req.method === "GET") {
+          const raw = db.getMeta("session");
+          const path = db.getMeta("sessionPath");
+          let session = null;
+          try {
+            session = raw ? JSON.parse(raw) : null;
+          } catch {
+            session = null;
+          }
+          send(res, 200, JSON.stringify(session ? { session, path } : null), { "content-type": "application/json" });
+          return;
+        }
+        if (urlPath.startsWith("/__biva/session") && req.method === "DELETE") {
+          db.setMeta("session", "");
+          db.setMeta("sessionToken", "");
+          db.setMeta("sessionPath", "");
+          send(res, 204, "", { "content-type": "application/json" });
+          return;
+        }
+        if (urlPath.startsWith("/__biva/session") && req.method === "POST") {
+          const posted = JSON.parse((await readRequestBody(req)).toString("utf8") || "{}");
+          if (posted.session) {
+            db.setMeta("session", JSON.stringify(posted.session));
+            if (posted.session.token) db.setMeta("sessionToken", posted.session.token);
+          }
+          if (typeof posted.path === "string" && posted.path.startsWith("/")) db.setMeta("sessionPath", posted.path);
+          send(res, 204, "", { "content-type": "application/json" });
+          return;
+        }
 
         const method = (req.method || "GET").toUpperCase();
         const variant = variantOf(req);
@@ -466,7 +542,17 @@ function startLocalApp({ upstream, db, mirrorDir }) {
               summary: describeChange(method, urlPath),
               createdAt: new Date().toISOString(),
             });
-            send(res, 202, JSON.stringify({ id, offlineQueued: true }), { "content-type": "application/json" });
+            if (!multipart) applyOfflineChange(db, method, urlPath, body.toString("utf8"));
+            let echoed = { id, offlineQueued: true };
+            if (!multipart) {
+              try {
+                const parsed = JSON.parse(body.toString("utf8"));
+                if (parsed && typeof parsed === "object") echoed = { ...parsed, id, offlineQueued: true };
+              } catch {
+                // The queue entry is enough when the body is not JSON.
+              }
+            }
+            send(res, 202, JSON.stringify(echoed), { "content-type": "application/json" });
             return;
           }
           const response = await fetch(origin + urlPath, {
@@ -494,6 +580,17 @@ function startLocalApp({ upstream, db, mirrorDir }) {
             });
             const raw = Buffer.from(await response.arrayBuffer());
             const type = response.headers.get("content-type") || "application/octet-stream";
+            if (response.status === 401) {
+              const saved = findSaved(mirror, urlPath, variant, authed);
+              const row = !saved && urlPath.startsWith("/api/") ? db.read(`GET ${urlPath.split("?")[0]}`) : null;
+              const body = saved?.body || row?.body;
+              if (body) {
+                send(res, saved?.meta?.status || row?.status || 200, body, {
+                  "content-type": saved?.meta?.contentType || "application/json",
+                });
+                return;
+              }
+            }
             const body = storeGet(urlPath, urlPath.startsWith("/_next/") ? "asset" : variant, urlPath.startsWith("/_next/") ? false : authed, response, raw, sessionTenant);
             const headers = { "content-type": type };
             const cookies = typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
@@ -541,4 +638,4 @@ function startLocalApp({ upstream, db, mirrorDir }) {
   });
 }
 
-module.exports = { startLocalApp };
+module.exports = { startLocalApp, savedStartPath };

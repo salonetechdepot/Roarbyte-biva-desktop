@@ -8,7 +8,7 @@ const { app, BrowserWindow, Menu, shell, session, dialog, ipcMain } = require("e
 const path = require("node:path");
 const fs = require("node:fs");
 const { openOfflineDb, registerOfflineIpc } = require("./offline-db");
-const { startLocalApp } = require("./local-app");
+const { startLocalApp, savedStartPath } = require("./local-app");
 
 // ---------------------------------------------------------------- configuration
 
@@ -374,6 +374,11 @@ function checkForUpdates(manual) {
     });
 }
 
+ipcMain.handle("biva-update:install", () => {
+  checkForUpdates(true);
+  return true;
+});
+
 // ---------------------------------------------------------------- start
 
 if (!app.requestSingleInstanceLock()) {
@@ -424,7 +429,8 @@ if (!app.requestSingleInstanceLock()) {
       try {
         const local = await startLocalApp({ upstream: APP_URL, db, mirrorDir });
         localOrigin = local.origin;
-        createMainWindow(local.origin + (config.startPath || "/"));
+        const resume = savedStartPath(db);
+        createMainWindow(local.origin + (resume || config.startPath || "/"));
       } catch (error) {
         console.warn("Local app did not start:", error?.message || error);
         createMainWindow(START_URL);
