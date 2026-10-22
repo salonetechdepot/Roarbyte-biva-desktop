@@ -290,6 +290,14 @@ function send(res, status, body, headers) {
   res.end(body);
 }
 
+function savedSessionPage(path) {
+  const next = path && path.startsWith("/") && !path.startsWith("//") && !path.includes("://") ? path : "/portal";
+  const safe = next.replace(/["<>]/g, "");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>BIVA</title></head>
+<body style="font-family:Segoe UI,sans-serif;background:#fbf6e8;color:#12345B;display:grid;place-items:center;height:100vh;margin:0">
+<main style="max-width:420px;text-align:center"><h1>Your business is saved on this computer</h1><p><a href="${safe}">Open BIVA</a></p></main></body></html>`;
+}
+
 function setupPage() {
   return `<!doctype html><html><head><meta charset="utf-8"><title>BIVA</title></head>
 <body style="font-family:Segoe UI,sans-serif;background:#fbf6e8;color:#12345B;display:grid;place-items:center;height:100vh;margin:0">
@@ -616,6 +624,20 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           send(res, 503, JSON.stringify({ title: "Not on this computer yet", detail: "Connect to the internet once so BIVA can download this." }), {
             "content-type": "application/json",
           });
+          return;
+        }
+        const sessionPath = db.getMeta("sessionPath") || "";
+        const fallbackPaths = [sessionPath, "/portal", "/inventory", "/admin", "/account/login"];
+        for (const candidate of fallbackPaths) {
+          if (!candidate || !candidate.startsWith("/")) continue;
+          const fallback = findSaved(mirror, candidate.split("?")[0], "document", true);
+          if (fallback) {
+            send(res, fallback.meta.status || 200, fallback.body, { "content-type": fallback.meta.contentType || "text/html" });
+            return;
+          }
+        }
+        if (db.getMeta("session")) {
+          send(res, 200, savedSessionPage(sessionPath), { "content-type": "text/html; charset=utf-8" });
           return;
         }
         send(res, 503, setupPage(), { "content-type": "text/html; charset=utf-8" });
