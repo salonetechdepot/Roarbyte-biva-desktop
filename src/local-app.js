@@ -37,6 +37,10 @@ function findSaved(mirror, urlPath, variant, authed) {
   else {
     add(`${variant}-${authed ? "auth" : "anon"}`);
     add(`${variant}-${authed ? "anon" : "auth"}`);
+    add("rsc-auth");
+    add("rsc-anon");
+    add("prefetch-auth");
+    add("prefetch-anon");
     add("document-auth");
     add("document-anon");
   }
@@ -73,7 +77,118 @@ function variantOf(req) {
 }
 
 function hasSession(req) {
-  return String(req.headers.cookie || "").includes("inventory_access_token");
+  return Boolean(tenantIdFromCookie(req.headers.cookie));
+}
+
+const WARM_VERSION = "tenant-pages-2";
+
+const TENANT_LISTS = [
+  "products", "customers", "suppliers", "categories", "sub-categories", "warehouses", "sales", "sale-lines",
+  "receipts", "employees", "departments", "expenses", "incomes", "pos-registers", "cashiers", "shifts",
+  "holidays", "leaves", "users", "documents", "document-folders", "job-roles", "payrolls", "payroll-items",
+  "allowances", "deductions", "assign-allowances", "assign-deductions", "assign-shifts", "presents", "absents",
+  "employee-holidays", "stock-records", "ledgers", "staff-alerts", "subscriptions", "managers",
+  "department-heads", "unit-measures", "product-tags", "company-transfers",
+];
+
+function tenantIdFromToken(token) {
+  const part = String(token || "").split(".")[1];
+  if (!part) return null;
+  try {
+    const json = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    for (const [key, value] of Object.entries(json)) {
+      if (typeof value !== "string" || !value.trim()) continue;
+      if (key === "tenant_id" || key === "tenantId" || key === "TenantId" || key === "tid" || /tenant/i.test(key)) {
+        return value.trim();
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function tenantIdFromCookie(cookie) {
+  const match = String(cookie || "").match(/(?:^|;\s*)inventory_access_token=([^;]+)/);
+  if (!match) return null;
+  try {
+    return tenantIdFromToken(decodeURIComponent(match[1]));
+  } catch {
+    return tenantIdFromToken(match[1]);
+  }
+}
+
+function pathTenant(urlPath) {
+  const match = String(urlPath || "").match(/\/by-tenant\/([^/?]+)/i);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+function rowTenant(row) {
+  if (!row || typeof row !== "object") return null;
+  const value = row.tenant_id || row.tenantId || row.TenantId;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/** Keep only this tenant's rows. Lists with no tenant field are stored as-is. */
+function tenantSlice(text, tenantId) {
+  if (!tenantId) return null;
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  const apply = (list) => list.filter((row) => {
+    const owner = rowTenant(row);
+    return !owner || owner === tenantId;
+  });
+  if (Array.isArray(json)) return JSON.stringify(apply(json));
+  if (json && Array.isArray(json.data)) return JSON.stringify({ ...json, data: apply(json.data) });
+  if (json && Array.isArray(json.items)) return JSON.stringify({ ...json, items: apply(json.items) });
+  if (json && Array.isArray(json.value)) return JSON.stringify({ ...json, value: apply(json.value) });
+  const owner = rowTenant(json);
+  if (owner && owner !== tenantId) return null;
+  return text;
+}
+
+function tenantDataPaths(tenantId) {
+  const id = encodeURIComponent(tenantId);
+  const paths = TENANT_LISTS.map((name) => `/api/proxy/api/${name}/by-tenant/${id}`);
+  paths.push(
+    `/api/proxy/api/sales/by-tenant/${id}/kpis`,
+    `/api/proxy/api/sales/by-tenant/${id}/daily`,
+    `/api/proxy/api/sales/by-tenant/${id}/monthly`,
+    `/api/proxy/api/products/by-tenant/${id}/kpis`,
+    `/api/proxy/api/departments/overview/by-tenant/${id}`,
+    `/api/proxy/api/ledgers/monthly-summary/by-tenant/${id}`,
+    `/api/proxy/api/sub-categories/by-tenant/${id}/generations`,
+    `/api/proxy/api/sub-categories/by-tenant/${id}/warehouse-stocks`,
+    `/api/proxy/api/warehouses/by-tenant/${id}/stock-records`,
+    `/api/proxy/api/categories/by-tenant/${id}/stock-records`,
+    `/api/proxy/api/payroll-items/by-tenant/${id}/grouped-by-payroll`,
+    `/api/proxy/api/staff-attendance/settings/by-tenant/${id}`,
+    `/api/proxy/api/nassit/settings/by-tenant/${id}`,
+    `/api/proxy/api/paye/settings/by-tenant/${id}`,
+    `/api/proxy/api/notifications/by-tenant/${id}/policy`,
+  );
+  return paths;
+}
+
+function pageLinks(html) {
+  const found = [];
+  for (const match of String(html).matchAll(/href="(\/[^"#]*)"/g)) {
+    const path = match[1].split("?")[0];
+    if (!path || path.startsWith("/_next") || path.startsWith("/api") || path.startsWith("/__biva")) continue;
+    if (/\.[a-z0-9]+$/i.test(path)) continue;
+    const clean = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+    found.push(clean || "/");
+  }
+  return found;
 }
 
 function rewriteBody(body, contentType, fromOrigin, toOrigin) {
@@ -166,35 +281,53 @@ function startLocalApp({ upstream, db, mirrorDir }) {
       return { response, body: Buffer.from(await response.arrayBuffer()) };
     }
 
-    function storeGet(urlPath, variant, authed, response, body) {
+    function storeGet(urlPath, variant, authed, response, body, tenantId) {
       const type = response.headers.get("content-type") || "application/octet-stream";
       const rewritten = rewriteBody(body, type, origin, localOrigin);
       const folder = urlPath.startsWith("/_next/") ? "asset-anon" : `${variant}-${authed ? "auth" : "anon"}`;
-      if (response.ok) writeMirror(safeFile(mirror, urlPath, folder), rewritten, { status: response.status, contentType: type });
-      if (urlPath.split("?")[0].startsWith("/api/") && response.ok && type.includes("json") && db) {
-        db.writeCache(`GET ${urlPath.split("?")[0]}`, response.status, rewritten.toString("utf8"));
+      const apiPath = urlPath.split("?")[0];
+      const isApi = apiPath.startsWith("/api/") && type.includes("json");
+      let stored = rewritten;
+      if (isApi) {
+        const owner = pathTenant(apiPath);
+        if (owner && tenantId && owner !== tenantId) return rewritten;
+        const sliced = tenantSlice(rewritten.toString("utf8"), tenantId);
+        if (sliced == null) return rewritten;
+        stored = Buffer.from(sliced);
+        if (response.ok && db) db.writeCache(`GET ${apiPath}`, response.status, sliced);
       }
+      if (response.ok) writeMirror(safeFile(mirror, urlPath, folder), stored, { status: response.status, contentType: type });
       return rewritten;
+    }
+
+    function forgetOtherTenants(tenantId) {
+      if (!db.dropCache) return;
+      for (const key of db.listCacheKeys()) {
+        const path = String(key).replace(/^GET\s+/, "");
+        if (!path.startsWith("/api/")) continue;
+        const owner = pathTenant(path);
+        if (!owner || (tenantId && owner !== tenantId)) db.dropCache(key);
+      }
     }
 
     async function warm(cookie) {
       if (warming || !db) return;
+      const tenantId = tenantIdFromCookie(cookie);
+      if (!tenantId) return;
+      if (db.getMeta("warmVersion") === WARM_VERSION && db.getMeta("tenantId") === tenantId) return;
       warming = true;
       db.setMeta("uiReady", "running");
+      db.setMeta("tenantId", tenantId);
       const headers = { accept: "text/html,application/xhtml+xml", cookie: cookie || "" };
-      const collections = [
-        "products", "customers", "suppliers", "categories", "sub-categories", "warehouses", "sales", "sale-lines",
-        "receipts", "employees", "departments", "expenses", "incomes", "modules", "pos-registers", "cashiers",
-        "shifts", "holidays", "leaves",
-      ];
       try {
+        forgetOtherTenants(tenantId);
         let savedLists = 0;
-        for (const name of collections) {
-          if (!(await isOnline(true))) break;
+        for (const path of tenantDataPaths(tenantId)) {
+          if (!(await isOnline())) break;
           try {
-            const list = await pull(`/api/proxy/api/${name}`, { accept: "application/json", cookie: cookie || "" });
+            const list = await pull(path, { accept: "application/json", cookie: cookie || "" });
             if (list.response.ok) {
-              storeGet(`/api/proxy/api/${name}`, "document", true, list.response, list.body);
+              storeGet(path, "document", true, list.response, list.body, tenantId);
               savedLists += 1;
             }
           } catch {
@@ -202,25 +335,42 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           }
         }
         if (savedLists > 0) db.setMeta("seeded", new Date().toISOString());
-        for (const route of routes) {
-          if (!(await isOnline(true))) break;
+
+        const queue = [...routes];
+        const seen = new Set(queue);
+        let finished = true;
+        for (let index = 0; index < queue.length && index < 500; index += 1) {
+          if (!(await isOnline())) {
+            finished = false;
+            break;
+          }
+          const route = queue[index];
           try {
             const document = await pull(route, headers);
-            const body = storeGet(route, "document", Boolean(cookie), document.response, document.body);
+            const body = storeGet(route, "document", true, document.response, document.body, tenantId);
+            const html = body.toString("utf8");
+            for (const link of pageLinks(html)) {
+              if (!seen.has(link)) {
+                seen.add(link);
+                queue.push(link);
+              }
+            }
             const assets = new Set();
-            for (const match of body.toString("utf8").matchAll(/(?:src|href)="(\/_next\/[^"]+)"/g)) assets.add(match[1]);
+            for (const match of html.matchAll(/(?:src|href)="(\/_next\/[^"]+)"/g)) assets.add(match[1].split("?")[0]);
             for (const asset of assets) {
               const saved = await pull(asset, { accept: "*/*" });
-              storeGet(asset.split("?")[0], "asset", false, saved.response, saved.body);
+              storeGet(asset, "asset", false, saved.response, saved.body, tenantId);
             }
-            const flight = await pull(route, { ...headers, rsc: "1", "next-router-prefetch": "1", accept: "*/*" });
-            storeGet(route, "prefetch", Boolean(cookie), flight.response, flight.body);
+            const flight = await pull(route, { ...headers, rsc: "1", accept: "*/*" });
+            storeGet(route, "rsc", true, flight.response, flight.body, tenantId);
           } catch {
             // Keep saving the other screens.
           }
         }
-        if (await isOnline()) db.setMeta("uiReady", new Date().toISOString());
-        else if (db.getMeta("uiReady") === "running") db.setMeta("uiReady", "");
+        if (finished && (await isOnline())) {
+          db.setMeta("warmVersion", WARM_VERSION);
+          db.setMeta("uiReady", new Date().toISOString());
+        } else if (db.getMeta("uiReady") === "running") db.setMeta("uiReady", "");
       } finally {
         warming = false;
       }
@@ -261,7 +411,7 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           if (!String(key).startsWith("GET /api/")) continue;
           try {
             const saved = await pull(String(key).slice(4), { accept: "application/json", cookie: cookie || "" });
-            if (saved.response.ok) storeGet(String(key).slice(4), "document", true, saved.response, saved.body);
+            if (saved.response.ok) storeGet(String(key).slice(4), "document", true, saved.response, saved.body, tenantIdFromCookie(cookie));
           } catch {
             // Keep the saved copy.
           }
@@ -278,7 +428,10 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           send(res, 500, "Offline storage is not ready.", { "content-type": "text/plain" });
           return;
         }
-        if (hasSession(req) && !db.getMeta("uiReady")) void warm(String(req.headers.cookie || ""));
+        const sessionTenant = tenantIdFromCookie(req.headers.cookie);
+        if (sessionTenant && (db.getMeta("warmVersion") !== WARM_VERSION || db.getMeta("tenantId") !== sessionTenant)) {
+          void warm(String(req.headers.cookie || ""));
+        }
         if (urlPath.startsWith("/__biva/sync") && req.method === "GET") {
           send(res, 200, JSON.stringify({ ...db.status(), online: await isOnline(), uiReady: db.getMeta("uiReady") }), { "content-type": "application/json" });
           return;
@@ -341,7 +494,7 @@ function startLocalApp({ upstream, db, mirrorDir }) {
             });
             const raw = Buffer.from(await response.arrayBuffer());
             const type = response.headers.get("content-type") || "application/octet-stream";
-            const body = storeGet(urlPath, urlPath.startsWith("/_next/") ? "asset" : variant, urlPath.startsWith("/_next/") ? false : authed, response, raw);
+            const body = storeGet(urlPath, urlPath.startsWith("/_next/") ? "asset" : variant, urlPath.startsWith("/_next/") ? false : authed, response, raw, sessionTenant);
             const headers = { "content-type": type };
             const cookies = typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
             if (cookies.length) headers["set-cookie"] = cookies.map(rewriteSetCookie);

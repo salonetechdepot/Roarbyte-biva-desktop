@@ -129,6 +129,11 @@ function openOfflineDb(file) {
       return status();
     }
 
+    function dropCache(key) {
+      db.run("DELETE FROM cache WHERE key = ?", [key]);
+      persist();
+    }
+
     function listCacheKeys() {
       const keys = [];
       const stmt = db.prepare("SELECT key FROM cache");
@@ -149,7 +154,7 @@ function openOfflineDb(file) {
     }
 
     persist();
-    return { status, read, writeCache, enqueue, drop, setMeta, getMeta: meta, listCacheKeys, markSynced };
+    return { status, read, writeCache, dropCache, enqueue, drop, setMeta, getMeta: meta, listCacheKeys, markSynced };
   });
 }
 
