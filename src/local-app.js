@@ -487,6 +487,23 @@ function startLocalApp({ upstream, db, mirrorDir }) {
         if (sessionTenant && (db.getMeta("warmVersion") !== WARM_VERSION || db.getMeta("tenantId") !== sessionTenant)) {
           void warm(String(req.headers.cookie || ""));
         }
+        if (urlPath.startsWith("/__biva/sync") && req.method === "DELETE") {
+          const id = new URL(urlPath, "http://127.0.0.1").searchParams.get("id");
+          if (id) db.drop(id);
+          send(res, 200, JSON.stringify({ ...db.status(), online: await isOnline(), uiReady: db.getMeta("uiReady") }), {
+            "content-type": "application/json",
+          });
+          return;
+        }
+        if (urlPath.startsWith("/__biva/sync") && req.method === "PUT") {
+          const raw = await readRequestBody(req);
+          const entry = JSON.parse(raw.toString("utf8"));
+          if (entry && entry.id) db.enqueue(entry);
+          send(res, 200, JSON.stringify({ ...db.status(), online: await isOnline(), uiReady: db.getMeta("uiReady") }), {
+            "content-type": "application/json",
+          });
+          return;
+        }
         if (urlPath.startsWith("/__biva/sync") && req.method === "GET") {
           send(res, 200, JSON.stringify({ ...db.status(), online: await isOnline(), uiReady: db.getMeta("uiReady") }), { "content-type": "application/json" });
           return;
