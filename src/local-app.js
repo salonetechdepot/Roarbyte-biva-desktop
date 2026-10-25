@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const routes = require("./app-routes.json");
+const { planOfflineSync, productBookFromRecords, itemBookFromStocks } = require("./last-unit");
 
 const PORT = 47321;
 const MAX_BODY = 32 * 1024 * 1024;
@@ -431,9 +432,49 @@ function startLocalApp({ upstream, db, mirrorDir }) {
       }
     }
 
+    function view(network) {
+      const shop = db.getMeta("shopOffline") === "1";
+      return {
+        ...db.status(),
+        shopOffline: shop,
+        network: Boolean(network),
+        online: Boolean(network) && !shop,
+        uiReady: db.getMeta("uiReady"),
+      };
+    }
+
+    async function stockBooks(cookie, pending) {
+      const needsProduct = pending.some((change) => /stock-records/i.test(change.path || ""));
+      const needsItem = pending.some((change) => /stock\/withdraw/i.test(change.path || ""));
+      const tenantId = tenantIdFromCookie(cookie);
+      if (!tenantId || (!needsProduct && !needsItem)) return { product: null, item: null };
+      async function read(urlPath, parse) {
+        try {
+          const saved = await pull(urlPath, { accept: "application/json", cookie: cookie || "" });
+          if (!saved.response.ok) return null;
+          return parse(JSON.parse(saved.body.toString("utf8")));
+        } catch {
+          return null;
+        }
+      }
+      const id = encodeURIComponent(tenantId);
+      return {
+        product: needsProduct ? await read(`/api/stock-records/by-tenant/${id}`, productBookFromRecords) : null,
+        item: needsItem ? await read(`/api/sub-categories/by-tenant/${id}/warehouse-stocks`, itemBookFromStocks) : null,
+      };
+    }
+
     async function syncNow(cookie) {
-      const failed = [];
-      for (const change of db.status().pending) {
+      const network = await isOnline(true);
+      if (db.getMeta("shopOffline") === "1") return { ...view(network), failed: [] };
+      const pending = db.status().pending;
+      const plan = planOfflineSync(pending, await stockBooks(cookie, pending));
+      const failed = plan.hold.map((row) => ({
+        id: row.change.id,
+        summary: row.change.summary,
+        message: row.message,
+      }));
+      for (const change of plan.send) {
         try {
           const headers = { accept: "application/json", "accept-encoding": "identity" };
           if (change.contentType) headers["content-type"] = change.contentType;
@@ -473,7 +514,7 @@ function startLocalApp({ upstream, db, mirrorDir }) {
         }
       }
       if (failed.length === 0) db.markSynced();
-      return { ...db.status(), online: await isOnline(), uiReady: db.getMeta("uiReady"), failed };
+      return { ...view(await isOnline()), failed };
     }
 
     const server = http.createServer(async (req, res) => {
@@ -487,10 +528,16 @@ function startLocalApp({ upstream, db, mirrorDir }) {
         if (sessionTenant && (db.getMeta("warmVersion") !== WARM_VERSION || db.getMeta("tenantId") !== sessionTenant)) {
           void warm(String(req.headers.cookie || ""));
         }
+        if (urlPath.startsWith("/__biva/mode") && req.method === "POST") {
+          const posted = JSON.parse((await readRequestBody(req)).toString("utf8") || "{}");
+          db.setMeta("shopOffline", posted.offline ? "1" : "0");
+          send(res, 200, JSON.stringify(view(await isOnline(true))), { "content-type": "application/json" });
+          return;
+        }
         if (urlPath.startsWith("/__biva/sync") && req.method === "DELETE") {
           const id = new URL(urlPath, "http://127.0.0.1").searchParams.get("id");
           if (id) db.drop(id);
-          send(res, 200, JSON.stringify({ ...db.status(), online: await isOnline(), uiReady: db.getMeta("uiReady") }), {
+          send(res, 200, JSON.stringify(view(await isOnline())), {
             "content-type": "application/json",
           });
           return;
@@ -499,13 +546,13 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           const raw = await readRequestBody(req);
           const entry = JSON.parse(raw.toString("utf8"));
           if (entry && entry.id) db.enqueue(entry);
-          send(res, 200, JSON.stringify({ ...db.status(), online: await isOnline(), uiReady: db.getMeta("uiReady") }), {
+          send(res, 200, JSON.stringify(view(await isOnline())), {
             "content-type": "application/json",
           });
           return;
         }
         if (urlPath.startsWith("/__biva/sync") && req.method === "GET") {
-          send(res, 200, JSON.stringify({ ...db.status(), online: await isOnline(), uiReady: db.getMeta("uiReady") }), { "content-type": "application/json" });
+          send(res, 200, JSON.stringify(view(await isOnline())), { "content-type": "application/json" });
           return;
         }
         if (urlPath.startsWith("/__biva/sync") && req.method === "POST") {
@@ -551,9 +598,10 @@ function startLocalApp({ upstream, db, mirrorDir }) {
         const variant = variantOf(req);
         const authed = hasSession(req);
 
+        const keepLocal = !(await isOnline()) || db.getMeta("shopOffline") === "1";
         if (method !== "GET" && method !== "HEAD") {
           const body = await readRequestBody(req);
-          if (!(await isOnline()) && urlPath.startsWith("/api/")) {
+          if (keepLocal && urlPath.startsWith("/api/")) {
             const multipart = String(req.headers["content-type"] || "").includes("multipart");
             const id = randomUUID();
             db.enqueue({
@@ -595,7 +643,7 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           return;
         }
 
-        if (await isOnline()) {
+        if (!keepLocal) {
           try {
             const response = await fetch(origin + urlPath, {
               method: "GET",
@@ -669,7 +717,7 @@ function startLocalApp({ upstream, db, mirrorDir }) {
       setInterval(() => {
         if (db.status().pendingCount === 0) return;
         void isOnline(true).then((online) => {
-          if (online) void syncNow("");
+          if (online && db.getMeta("shopOffline") !== "1") void syncNow("");
         });
       }, 30_000);
       resolve({ origin: localOrigin, close: () => server.close() });
