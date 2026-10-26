@@ -1,11 +1,12 @@
 // Runs before the BIVA web page with no Node access exposed to it.
 // The page can detect the desktop app with `window.bivaDesktop?.isDesktop`.
 const { contextBridge, ipcRenderer } = require("electron");
+const { version } = require("../package.json");
 
 contextBridge.exposeInMainWorld("bivaDesktop", {
   isDesktop: true,
   platform: process.platform,
-  version: "1.1.3",
+  version,
   update: () => ipcRenderer.invoke("biva-update:install"),
   install: () => ipcRenderer.invoke("biva-update:install"),
   offline: {
