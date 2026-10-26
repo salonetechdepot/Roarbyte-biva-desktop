@@ -220,6 +220,7 @@ function applyOfflineChange(db, method, urlPath, bodyText) {
 }
 
 function savedStartPath(db) {
+  if (db.getMeta("signedOut") === "1") return null;
   const raw = db.getMeta("session");
   const saved = db.getMeta("sessionPath") || "";
   if (!raw || raw === "null") return null;
@@ -565,6 +566,10 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           return;
         }
         if (urlPath.startsWith("/__biva/session") && req.method === "GET") {
+          if (db.getMeta("signedOut") === "1") {
+            send(res, 200, "null", { "content-type": "application/json" });
+            return;
+          }
           const raw = db.getMeta("session");
           const path = db.getMeta("sessionPath");
           let session = null;
@@ -577,6 +582,7 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           return;
         }
         if (urlPath.startsWith("/__biva/session") && req.method === "DELETE") {
+          db.setMeta("signedOut", "1");
           db.setMeta("session", "");
           db.setMeta("sessionToken", "");
           db.setMeta("sessionPath", "");
@@ -585,6 +591,11 @@ function startLocalApp({ upstream, db, mirrorDir }) {
         }
         if (urlPath.startsWith("/__biva/session") && req.method === "POST") {
           const posted = JSON.parse((await readRequestBody(req)).toString("utf8") || "{}");
+          if (posted.signIn) db.setMeta("signedOut", "0");
+          else if (db.getMeta("signedOut") === "1") {
+            send(res, 204, "", { "content-type": "application/json" });
+            return;
+          }
           if (posted.session) {
             db.setMeta("session", JSON.stringify(posted.session));
             if (posted.session.token) db.setMeta("sessionToken", posted.session.token);
@@ -649,7 +660,7 @@ function startLocalApp({ upstream, db, mirrorDir }) {
               method: "GET",
               headers: forwardHeaders(req),
               redirect: "follow",
-              signal: AbortSignal.timeout(90000),
+              signal: AbortSignal.timeout(5000),
             });
             const raw = Buffer.from(await response.arrayBuffer());
             const type = response.headers.get("content-type") || "application/octet-stream";

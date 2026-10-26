@@ -5,6 +5,8 @@
  * button in the app sends those local changes back to the cloud.
  */
 const { app, BrowserWindow, Menu, shell, session, dialog, ipcMain } = require("electron");
+// Localhost must keep working when Wi-Fi drops. Chromium otherwise treats it as offline.
+app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>");
 const path = require("node:path");
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
@@ -124,6 +126,12 @@ function wireNavigation(win) {
   contents.on("did-create-window", (child) => wireNavigation(child));
 
   contents.on("will-navigate", (event, url) => {
+    if (localOrigin && String(url).startsWith(APP_ORIGIN)) {
+      event.preventDefault();
+      const path = sameLocalPath(url) || config.startPath || "/";
+      void contents.loadURL(localOrigin + path);
+      return;
+    }
     if (!isInApp(url)) {
       event.preventDefault();
       openOutside(url);
@@ -159,12 +167,31 @@ function localStart() {
   return localOrigin + (resumePath || config.startPath || "/");
 }
 
-function showOffline(win, failedUrl, reason) {
-  const onLocal = localOrigin && String(failedUrl || "").startsWith(localOrigin);
-  if (localOrigin && !onLocal) {
-    void win.loadURL(localStart());
-    return;
+function sameLocalPath(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.origin !== APP_ORIGIN && !(localOrigin && url.origin === localOrigin)) return "";
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "";
   }
+}
+
+let localRetries = 0;
+
+function openSavedCopy(win) {
+  if (!localOrigin || !win || win.isDestroyed()) return false;
+  if (localRetries >= 2) return false;
+  localRetries += 1;
+  const current = win.webContents.getURL();
+  const path = sameLocalPath(current);
+  const next = localOrigin + (path && path !== "/" ? path : resumePath || config.startPath || "/");
+  void win.loadURL(next);
+  return true;
+}
+
+function showOffline(win, failedUrl, reason) {
+  if (openSavedCopy(win)) return;
   const target = failedUrl && failedUrl.startsWith(APP_ORIGIN) ? failedUrl : START_URL;
   void win.loadFile(path.join(PAGES, "offline.html"), {
     query: { target, local: localOrigin ? localStart() : "", reason: reason || "" },
@@ -204,12 +231,15 @@ function createMainWindow(startUrl) {
     mainWindow.setTitle(page && page !== "BIVA" ? `${page} · BIVA` : "BIVA");
   });
 
+  mainWindow.webContents.on("did-finish-load", () => {
+    localRetries = 0;
+  });
+
   mainWindow.webContents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
     // -3 = navigation aborted (normal when a page redirects); ignore sub-frames.
     if (!isMainFrame || code === -3) return;
-    if (localOrigin && NETWORK_ERROR_CODES.has(code) && !String(url).startsWith(localOrigin)) {
-      void mainWindow.loadURL(localStart());
-      return;
+    if (localOrigin && (NETWORK_ERROR_CODES.has(code) || String(url).startsWith(APP_ORIGIN) || String(url).startsWith(localOrigin))) {
+      if (openSavedCopy(mainWindow)) return;
     }
     showOffline(mainWindow, url, description);
   });
@@ -426,7 +456,8 @@ if (!app.requestSingleInstanceLock()) {
     contents.on("will-attach-webview", (event) => event.preventDefault());
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    await session.defaultSession.setProxy({ proxyRules: "direct://", proxyBypassRules: "<local>" }).catch(() => undefined);
     const dbFile = path.join(app.getPath("userData"), "biva-offline.sqlite");
     const mirrorDir = path.join(app.getPath("userData"), "app-mirror");
     const dbPromise = openOfflineDb(dbFile).catch((error) => {
