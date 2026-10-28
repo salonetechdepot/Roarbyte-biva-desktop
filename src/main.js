@@ -178,20 +178,31 @@ function sameLocalPath(rawUrl) {
 }
 
 let localRetries = 0;
+let localRetryTimer = null;
 
-function openSavedCopy(win) {
+function openSavedCopy(win, failedUrl) {
   if (!localOrigin || !win || win.isDestroyed()) return false;
-  if (localRetries >= 2) return false;
+  if (localRetryTimer) return true;
   localRetries += 1;
-  const current = win.webContents.getURL();
-  const path = sameLocalPath(current);
-  const next = localOrigin + (path && path !== "/" ? path : resumePath || config.startPath || "/");
-  void win.loadURL(next);
+  const failedPath = sameLocalPath(failedUrl || "");
+  const currentPath = sameLocalPath(win.webContents.getURL());
+  const nextPath =
+    failedPath && failedPath !== "/"
+      ? failedPath
+      : currentPath && currentPath !== "/"
+        ? currentPath
+        : resumePath || config.startPath || "/";
+  const next = localOrigin + nextPath;
+  const wait = Math.min(2000, 200 * localRetries);
+  localRetryTimer = setTimeout(() => {
+    localRetryTimer = null;
+    if (!win.isDestroyed()) void win.loadURL(next);
+  }, wait);
   return true;
 }
 
 function showOffline(win, failedUrl, reason) {
-  if (openSavedCopy(win)) return;
+  if (openSavedCopy(win, failedUrl)) return;
   const target = failedUrl && failedUrl.startsWith(APP_ORIGIN) ? failedUrl : START_URL;
   void win.loadFile(path.join(PAGES, "offline.html"), {
     query: { target, local: localOrigin ? localStart() : "", reason: reason || "" },
@@ -233,13 +244,17 @@ function createMainWindow(startUrl) {
 
   mainWindow.webContents.on("did-finish-load", () => {
     localRetries = 0;
+    if (localRetryTimer) {
+      clearTimeout(localRetryTimer);
+      localRetryTimer = null;
+    }
   });
 
   mainWindow.webContents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
     // -3 = navigation aborted (normal when a page redirects); ignore sub-frames.
     if (!isMainFrame || code === -3) return;
     if (localOrigin && (NETWORK_ERROR_CODES.has(code) || String(url).startsWith(APP_ORIGIN) || String(url).startsWith(localOrigin))) {
-      if (openSavedCopy(mainWindow)) return;
+      if (openSavedCopy(mainWindow, url)) return;
     }
     showOffline(mainWindow, url, description);
   });

@@ -81,7 +81,7 @@ function hasSession(req) {
   return Boolean(tenantIdFromCookie(req.headers.cookie));
 }
 
-const WARM_VERSION = "tenant-pages-2";
+const WARM_VERSION = "tenant-pages-3";
 
 const TENANT_LISTS = [
   "products", "customers", "suppliers", "categories", "sub-categories", "warehouses", "sales", "sale-lines",
@@ -117,6 +117,11 @@ function tenantIdFromCookie(cookie) {
   } catch {
     return tenantIdFromToken(match[1]);
   }
+}
+
+function tokenFromAuthorization(header) {
+  const match = String(header || "").match(/Bearer\s+(\S+)/i);
+  return match ? match[1] : "";
 }
 
 function pathTenant(urlPath) {
@@ -345,13 +350,20 @@ function startLocalApp({ upstream, db, mirrorDir }) {
       const apiPath = urlPath.split("?")[0];
       const isApi = apiPath.startsWith("/api/") && type.includes("json");
       let stored = rewritten;
-      if (isApi) {
+      if (isApi && response.ok && db) {
         const owner = pathTenant(apiPath);
         if (owner && tenantId && owner !== tenantId) return rewritten;
-        const sliced = tenantSlice(rewritten.toString("utf8"), tenantId);
-        if (sliced == null) return rewritten;
-        stored = Buffer.from(sliced);
-        if (response.ok && db) db.writeCache(`GET ${apiPath}`, response.status, sliced);
+        let text = rewritten.toString("utf8");
+        if (tenantId) {
+          const sliced = tenantSlice(text, tenantId);
+          if (sliced == null) return rewritten;
+          text = sliced;
+        }
+        if (text.length <= 8_000_000) {
+          stored = Buffer.from(text);
+          db.writeCache(`GET ${apiPath}`, response.status, text);
+          if (!db.getMeta("seeded")) db.setMeta("seeded", new Date().toISOString());
+        }
       }
       if (response.ok) writeMirror(safeFile(mirror, urlPath, folder), stored, { status: response.status, contentType: type });
       return rewritten;
@@ -369,20 +381,26 @@ function startLocalApp({ upstream, db, mirrorDir }) {
 
     async function warm(cookie) {
       if (warming || !db) return;
-      const tenantId = tenantIdFromCookie(cookie);
+      const savedToken = db.getMeta("sessionToken") || "";
+      const tenantId = tenantIdFromCookie(cookie) || tenantIdFromToken(savedToken);
+      const authCookie = tenantIdFromCookie(cookie)
+        ? cookie
+        : savedToken
+          ? `inventory_access_token=${encodeURIComponent(savedToken)}`
+          : cookie;
       if (!tenantId) return;
       if (db.getMeta("warmVersion") === WARM_VERSION && db.getMeta("tenantId") === tenantId) return;
       warming = true;
       db.setMeta("uiReady", "running");
       db.setMeta("tenantId", tenantId);
-      const headers = { accept: "text/html,application/xhtml+xml", cookie: cookie || "" };
+      const headers = { accept: "text/html,application/xhtml+xml", cookie: authCookie || "" };
       try {
         forgetOtherTenants(tenantId);
         let savedLists = 0;
         for (const path of tenantDataPaths(tenantId)) {
           if (!(await isOnline())) break;
           try {
-            const list = await pull(path, { accept: "application/json", cookie: cookie || "" });
+            const list = await pull(path, { accept: "application/json", cookie: authCookie || "" });
             if (list.response.ok) {
               storeGet(path, "document", true, list.response, list.body, tenantId);
               savedLists += 1;
@@ -525,9 +543,20 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           send(res, 500, "Offline storage is not ready.", { "content-type": "text/plain" });
           return;
         }
-        const sessionTenant = tenantIdFromCookie(req.headers.cookie);
+        const headerToken = tokenFromAuthorization(req.headers.authorization);
+        const sessionTenant =
+          tenantIdFromCookie(req.headers.cookie) ||
+          tenantIdFromToken(headerToken) ||
+          tenantIdFromToken(db.getMeta("sessionToken") || "");
         if (sessionTenant && (db.getMeta("warmVersion") !== WARM_VERSION || db.getMeta("tenantId") !== sessionTenant)) {
-          void warm(String(req.headers.cookie || ""));
+          const cookie = tenantIdFromCookie(req.headers.cookie)
+            ? String(req.headers.cookie || "")
+            : headerToken
+              ? `inventory_access_token=${encodeURIComponent(headerToken)}`
+              : db.getMeta("sessionToken")
+                ? `inventory_access_token=${encodeURIComponent(db.getMeta("sessionToken"))}`
+                : "";
+          void warm(cookie);
         }
         if (urlPath.startsWith("/__biva/mode") && req.method === "POST") {
           const posted = JSON.parse((await readRequestBody(req)).toString("utf8") || "{}");
@@ -561,7 +590,19 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           return;
         }
         if (urlPath.startsWith("/__biva/warm") && req.method === "POST") {
-          void warm(String(req.headers.cookie || ""));
+          const raw = await readRequestBody(req);
+          let postedToken = "";
+          try {
+            postedToken = JSON.parse(raw.toString("utf8") || "{}").token || "";
+          } catch {
+            postedToken = "";
+          }
+          const token = tokenFromAuthorization(req.headers.authorization) || postedToken || db.getMeta("sessionToken") || "";
+          if (token) db.setMeta("sessionToken", token);
+          const cookie = token
+            ? `inventory_access_token=${encodeURIComponent(token)}`
+            : String(req.headers.cookie || "");
+          void warm(cookie);
           send(res, 202, JSON.stringify({ started: true, routes: routes.length }), { "content-type": "application/json" });
           return;
         }
@@ -598,7 +639,10 @@ function startLocalApp({ upstream, db, mirrorDir }) {
           }
           if (posted.session) {
             db.setMeta("session", JSON.stringify(posted.session));
-            if (posted.session.token) db.setMeta("sessionToken", posted.session.token);
+            if (posted.session.token) {
+              db.setMeta("sessionToken", posted.session.token);
+              void warm(`inventory_access_token=${encodeURIComponent(posted.session.token)}`);
+            }
           }
           if (typeof posted.path === "string" && posted.path.startsWith("/")) db.setMeta("sessionPath", posted.path);
           send(res, 204, "", { "content-type": "application/json" });
